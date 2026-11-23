@@ -37,10 +37,12 @@ final class SRTMuxer: IOMuxer {
 
     func append(_ audioBuffer: AVAudioBuffer, when: AVAudioTime) {
         writer.append(audioBuffer, when: when)
+        stream?.publishStats.set(writer.stats)
     }
 
     func append(_ sampleBuffer: CMSampleBuffer) {
         writer.append(sampleBuffer)
+        stream?.publishStats.set(writer.stats)
     }
 
     func read(_ data: Data) {
@@ -63,6 +65,7 @@ extension SRTMuxer: Running {
         }
         reader.clear()
         writer.clear()
+        stream?.publishStats.set(writer.stats)
         isRunning.mutate { $0 = false }
     }
 }

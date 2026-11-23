@@ -61,6 +61,14 @@ public final class TSWriter<T: TSWriterDelegate> {
     /// Appends arrive on the audio queue and VideoToolbox's callback thread while
     /// clear() runs on the stream's queue: every entry point takes this lock.
     private let lock = NSRecursiveLock()
+    private var programsWritten = 0
+    private var videoKeyFramesWritten = 0
+    /// Since the last clear(): program tables (PAT + PMT) written, and video
+    /// keyframes written (each carries its parameter sets). Safe from any thread.
+    public var stats: (programs: Int, videoKeyFrames: Int) {
+        lock.lock(); defer { lock.unlock() }
+        return (programsWritten, videoKeyFramesWritten)
+    }
     private(set) var pat: TSProgramAssociation = {
         let PAT: TSProgramAssociation = .init()
         PAT.programs = [1: kTSWriter_defaultPMTPID]
@@ -143,6 +151,7 @@ public final class TSWriter<T: TSWriterDelegate> {
                     timeStamp: timestamp,
                     randomAccessIndicator: !sampleBuffer.isNotSync
                 )
+                if !sampleBuffer.isNotSync { videoKeyFramesWritten += 1 }
             }
         default:
             break
@@ -164,6 +173,8 @@ public final class TSWriter<T: TSWriterDelegate> {
         audioTimeStamp = .invalid
         clockTimeStamp = .zero
         rotatedTimeStamp = .zero
+        programsWritten = 0
+        videoKeyFramesWritten = 0
     }
 
     private func writePacketizedElementaryStream(_ PID: UInt16, PES: PacketizedElementaryStream, timeStamp: CMTime, randomAccessIndicator: Bool) {
@@ -205,6 +216,7 @@ public final class TSWriter<T: TSWriterDelegate> {
     }
 
     private func writeProgram() {
+        programsWritten += 1
         pmt.PCRPID = pcrPID
         var bytes = Data()
         var packets: [TSPacket] = []

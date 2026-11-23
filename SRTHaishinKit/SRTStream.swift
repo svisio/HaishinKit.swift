@@ -3,8 +3,26 @@ import Foundation
 import HaishinKit
 import libsrt
 
+/// What the TS muxer has written since the stream last started publishing.
+public final class SRTPublishStats: @unchecked Sendable {
+    private let lock = NSLock()
+    private var programs = 0
+    private var videoKeyFrames = 0
+
+    /// Program tables (PAT + PMT) written.
+    public var programsWritten: Int { lock.lock(); defer { lock.unlock() }; return programs }
+    /// Video keyframes written; each carries its parameter sets (SPS / PPS).
+    public var videoKeyFramesWritten: Int { lock.lock(); defer { lock.unlock() }; return videoKeyFrames }
+
+    func set(_ stats: (programs: Int, videoKeyFrames: Int)) {
+        lock.lock(); programs = stats.programs; videoKeyFrames = stats.videoKeyFrames; lock.unlock()
+    }
+}
+
 /// An object that provides the interface to control a one-way channel over a SRTConnection.
 public final class SRTStream: IOStream {
+    /// Sideline patch: lets the app check that a connection announced its video.
+    public let publishStats = SRTPublishStats()
     private var name: String?
     private var action: (() -> Void)?
     private var keyValueObservations: [NSKeyValueObservation] = []
