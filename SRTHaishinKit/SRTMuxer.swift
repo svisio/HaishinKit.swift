@@ -51,14 +51,14 @@ final class SRTMuxer: IOMuxer {
 extension SRTMuxer: Running {
     // MARK: Running
     func startRunning() {
-        guard isRunning.value else {
+        guard !isRunning.value else {
             return
         }
         isRunning.mutate { $0 = true }
     }
 
     func stopRunning() {
-        guard !isRunning.value else {
+        guard isRunning.value else {
             return
         }
         reader.clear()

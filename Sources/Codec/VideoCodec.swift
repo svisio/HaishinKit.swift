@@ -224,6 +224,10 @@ extension VideoCodec: Running {
             )
             #endif
             self.startedAt = self.passthrough ? .zero : CMClockGetTime(CMClockGetHostTimeClock())
+            // A callback from the previous run can land after stopRunning() and leave its
+            // format here; the next run's (equal) format is then never announced to the muxer.
+            self.outputFormat = nil
+            self.invalidateSession = true
             self.isRunning.mutate { $0 = true }
         }
     }

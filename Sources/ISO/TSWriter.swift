@@ -30,9 +30,12 @@ public final class TSWriter<T: TSWriterDelegate> {
             guard let audioFormat, audioFormat != oldValue else {
                 return
             }
+            lock.lock(); defer { lock.unlock() }
             var data = ESSpecificData()
             data.streamType = audioFormat.formatDescription.streamType
             data.elementaryPID = kTSWriter_defaultAudioPID
+            // Replace, never append: a second format for the same PID listed that PID twice.
+            pmt.elementaryStreamSpecificData.removeAll { $0.elementaryPID == kTSWriter_defaultAudioPID }
             pmt.elementaryStreamSpecificData.append(data)
             audioContinuityCounter = 0
             writeProgramIfNeeded()
@@ -44,15 +47,20 @@ public final class TSWriter<T: TSWriterDelegate> {
             guard let videoFormat, videoFormat != oldValue else {
                 return
             }
+            lock.lock(); defer { lock.unlock() }
             var data = ESSpecificData()
             data.streamType = videoFormat.streamType
             data.elementaryPID = kTSWriter_defaultVideoPID
+            pmt.elementaryStreamSpecificData.removeAll { $0.elementaryPID == kTSWriter_defaultVideoPID }
             pmt.elementaryStreamSpecificData.append(data)
             videoContinuityCounter = 0
             writeProgramIfNeeded()
         }
     }
 
+    /// Appends arrive on the audio queue and VideoToolbox's callback thread while
+    /// clear() runs on the stream's queue: every entry point takes this lock.
+    private let lock = NSRecursiveLock()
     private(set) var pat: TSProgramAssociation = {
         let PAT: TSProgramAssociation = .init()
         PAT.programs = [1: kTSWriter_defaultPMTPID]
@@ -90,6 +98,7 @@ public final class TSWriter<T: TSWriterDelegate> {
 
     /// Appends a buffer.
     public func append(_ audioBuffer: AVAudioBuffer, when: AVAudioTime) {
+        lock.lock(); defer { lock.unlock() }
         guard let audioBuffer = audioBuffer as? AVAudioCompressedBuffer, canWriteFor else {
             return
         }
@@ -112,6 +121,7 @@ public final class TSWriter<T: TSWriterDelegate> {
 
     /// Appends a buffer.
     public func append(_ sampleBuffer: CMSampleBuffer) {
+        lock.lock(); defer { lock.unlock() }
         guard canWriteFor else {
             return
         }
@@ -141,6 +151,7 @@ public final class TSWriter<T: TSWriterDelegate> {
 
     /// Clears the writer object for new transport stream.
     public func clear() {
+        lock.lock(); defer { lock.unlock() }
         audioFormat = nil
         audioContinuityCounter = 0
         videoFormat = nil
