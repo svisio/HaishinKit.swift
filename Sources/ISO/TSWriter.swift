@@ -23,14 +23,27 @@ public final class TSWriter<T: TSWriterDelegate> {
     /// Specifies the delegate instance.
     public weak var delegate: T?
     /// Specifies the exptected medias = [.video, .audio].
-    public var expectedMedias: Set<AVMediaType> = []
+    ///
+    /// Sideline patch (build 8 review): the formats and expected medias are
+    /// written from VideoToolbox's callback thread, the audio queue and the
+    /// stream's queue, read by append() and nil'd by clear() on the socket
+    /// thread. They are computed over private storage so every read and write
+    /// happens under `lock`; a stored property with the lock taken in didSet
+    /// was written before the lock.
+    public var expectedMedias: Set<AVMediaType> {
+        get { lock.lock(); defer { lock.unlock() }; return _expectedMedias }
+        set { lock.lock(); defer { lock.unlock() }; _expectedMedias = newValue }
+    }
     /// Specifies the audio format.
     public var audioFormat: AVAudioFormat? {
-        didSet {
-            guard let audioFormat, audioFormat != oldValue else {
+        get { lock.lock(); defer { lock.unlock() }; return _audioFormat }
+        set {
+            lock.lock(); defer { lock.unlock() }
+            let oldValue = _audioFormat
+            _audioFormat = newValue
+            guard let audioFormat = newValue, audioFormat != oldValue else {
                 return
             }
-            lock.lock(); defer { lock.unlock() }
             var data = ESSpecificData()
             data.streamType = audioFormat.formatDescription.streamType
             data.elementaryPID = kTSWriter_defaultAudioPID
@@ -43,11 +56,14 @@ public final class TSWriter<T: TSWriterDelegate> {
     }
     /// Specifies the video format.
     public var videoFormat: CMFormatDescription? {
-        didSet {
-            guard let videoFormat, videoFormat != oldValue else {
+        get { lock.lock(); defer { lock.unlock() }; return _videoFormat }
+        set {
+            lock.lock(); defer { lock.unlock() }
+            let oldValue = _videoFormat
+            _videoFormat = newValue
+            guard let videoFormat = newValue, videoFormat != oldValue else {
                 return
             }
-            lock.lock(); defer { lock.unlock() }
             var data = ESSpecificData()
             data.streamType = videoFormat.streamType
             data.elementaryPID = kTSWriter_defaultVideoPID
@@ -57,6 +73,14 @@ public final class TSWriter<T: TSWriterDelegate> {
             writeProgramIfNeeded()
         }
     }
+    private var _expectedMedias: Set<AVMediaType> = []
+    private var _audioFormat: AVAudioFormat?
+    private var _videoFormat: CMFormatDescription?
+    /// Sideline patch: a new transport stream (init or clear()) starts video at
+    /// a keyframe. Frames before it are dropped, so the first video a receiver
+    /// sees carries its parameter sets (SPS / PPS) in-band.
+    private var needsVideoKeyFrame = true
+    private var firstKeyFrameSPS: Data?
 
     /// Appends arrive on the audio queue and VideoToolbox's callback thread while
     /// clear() runs on the stream's queue: every entry point takes this lock.
@@ -69,6 +93,13 @@ public final class TSWriter<T: TSWriterDelegate> {
         lock.lock(); defer { lock.unlock() }
         return (programsWritten, videoKeyFramesWritten)
     }
+    /// The H.264 SPS carried in-band by the first keyframe written since the
+    /// last clear() (nil until then, and for HEVC). The app parses it to prove
+    /// the stream announced a decodable picture size.
+    public var announcedSPS: Data? {
+        lock.lock(); defer { lock.unlock() }
+        return firstKeyFrameSPS
+    }
     private(set) var pat: TSProgramAssociation = {
         let PAT: TSProgramAssociation = .init()
         PAT.programs = [1: kTSWriter_defaultPMTPID]
@@ -77,17 +108,17 @@ public final class TSWriter<T: TSWriterDelegate> {
     private(set) var pmt: TSProgramMap = .init()
     private var pcrPID: UInt16 = kTSWriter_defaultVideoPID
     private var canWriteFor: Bool {
-        guard !expectedMedias.isEmpty else {
+        guard !_expectedMedias.isEmpty else {
             return true
         }
-        if expectedMedias.contains(.audio) && expectedMedias.contains(.video) {
-            return audioFormat != nil && videoFormat != nil
+        if _expectedMedias.contains(.audio) && _expectedMedias.contains(.video) {
+            return _audioFormat != nil && _videoFormat != nil
         }
-        if expectedMedias.contains(.video) {
-            return videoFormat != nil
+        if _expectedMedias.contains(.video) {
+            return _videoFormat != nil
         }
-        if expectedMedias.contains(.audio) {
-            return audioFormat != nil
+        if _expectedMedias.contains(.audio) {
+            return _audioFormat != nil
         }
         return false
     }
@@ -135,6 +166,13 @@ public final class TSWriter<T: TSWriterDelegate> {
         }
         switch sampleBuffer.formatDescription?.mediaType {
         case .video?:
+            let isKeyFrame = !sampleBuffer.isNotSync
+            if needsVideoKeyFrame {
+                // Start at a keyframe that carries its parameter sets.
+                guard isKeyFrame, !(sampleBuffer.formatDescription?.parameterSets.isEmpty ?? true) else {
+                    return
+                }
+            }
             if videoTimeStamp == .invalid {
                 videoTimeStamp = sampleBuffer.presentationTimeStamp
                 if pcrPID == kTSWriter_defaultVideoPID {
@@ -151,7 +189,15 @@ public final class TSWriter<T: TSWriterDelegate> {
                     timeStamp: timestamp,
                     randomAccessIndicator: !sampleBuffer.isNotSync
                 )
-                if !sampleBuffer.isNotSync { videoKeyFramesWritten += 1 }
+                if isKeyFrame {
+                    videoKeyFramesWritten += 1
+                    if needsVideoKeyFrame {
+                        needsVideoKeyFrame = false
+                        if sampleBuffer.formatDescription?.mediaSubType == .h264 {
+                            firstKeyFrameSPS = sampleBuffer.formatDescription?.parameterSets.first
+                        }
+                    }
+                }
             }
         default:
             break
@@ -161,9 +207,9 @@ public final class TSWriter<T: TSWriterDelegate> {
     /// Clears the writer object for new transport stream.
     public func clear() {
         lock.lock(); defer { lock.unlock() }
-        audioFormat = nil
+        _audioFormat = nil
         audioContinuityCounter = 0
-        videoFormat = nil
+        _videoFormat = nil
         videoContinuityCounter = 0
         pcrPID = kTSWriter_defaultVideoPID
         pat.programs.removeAll()
@@ -175,6 +221,8 @@ public final class TSWriter<T: TSWriterDelegate> {
         rotatedTimeStamp = .zero
         programsWritten = 0
         videoKeyFramesWritten = 0
+        needsVideoKeyFrame = true
+        firstKeyFrameSPS = nil
     }
 
     private func writePacketizedElementaryStream(_ PID: UInt16, PES: PacketizedElementaryStream, timeStamp: CMTime, randomAccessIndicator: Bool) {
@@ -229,7 +277,7 @@ public final class TSWriter<T: TSWriterDelegate> {
     }
 
     private func writeProgramIfNeeded() {
-        guard !expectedMedias.isEmpty else {
+        guard !_expectedMedias.isEmpty else {
             return
         }
         guard canWriteFor else {

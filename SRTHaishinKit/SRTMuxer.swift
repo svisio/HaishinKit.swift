@@ -3,28 +3,27 @@ import Foundation
 import HaishinKit
 
 final class SRTMuxer: IOMuxer {
+    // Sideline patch (build 8 review): pass straight through to the writer,
+    // which keeps them under its lock. Stored copies here were written from
+    // the audio queue, VideoToolbox's callback thread and the stream's queue
+    // with no lock at all.
     var audioFormat: AVAudioFormat? {
-        didSet {
-            writer.audioFormat = audioFormat
-        }
+        get { writer.audioFormat }
+        set { writer.audioFormat = newValue }
     }
     var videoFormat: CMFormatDescription? {
-        didSet {
-            writer.videoFormat = videoFormat
-        }
+        get { writer.videoFormat }
+        set { writer.videoFormat = newValue }
     }
-    var expectedMedias: Set<AVMediaType> = [] {
-        didSet {
-            writer.expectedMedias = expectedMedias
-        }
+    var expectedMedias: Set<AVMediaType> {
+        get { writer.expectedMedias }
+        set { writer.expectedMedias = newValue }
     }
     private weak var stream: SRTStream?
     private(set) var isRunning: Atomic<Bool> = .init(false)
-    private lazy var writer = {
-        var writer = TSWriter<SRTMuxer>()
-        writer.delegate = self
-        return writer
-    }()
+    // Not lazy: a lazy var is not thread-safe, and the formats above are now
+    // read and written through it from several threads.
+    private let writer = TSWriter<SRTMuxer>()
     private lazy var reader = {
         var reader = TSReader<SRTMuxer>()
         reader.delegate = self
@@ -33,6 +32,7 @@ final class SRTMuxer: IOMuxer {
 
     init(_ stream: SRTStream) {
         self.stream = stream
+        writer.delegate = self
     }
 
     func append(_ audioBuffer: AVAudioBuffer, when: AVAudioTime) {
@@ -42,7 +42,7 @@ final class SRTMuxer: IOMuxer {
 
     func append(_ sampleBuffer: CMSampleBuffer) {
         writer.append(sampleBuffer)
-        stream?.publishStats.set(writer.stats)
+        stream?.publishStats.set(writer.stats, announcedSPS: writer.announcedSPS)
     }
 
     func read(_ data: Data) {
@@ -65,7 +65,7 @@ extension SRTMuxer: Running {
         }
         reader.clear()
         writer.clear()
-        stream?.publishStats.set(writer.stats)
+        stream?.publishStats.set(writer.stats, announcedSPS: nil)
         isRunning.mutate { $0 = false }
     }
 }

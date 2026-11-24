@@ -14,8 +14,17 @@ public final class SRTPublishStats: @unchecked Sendable {
     /// Video keyframes written; each carries its parameter sets (SPS / PPS).
     public var videoKeyFramesWritten: Int { lock.lock(); defer { lock.unlock() }; return videoKeyFrames }
 
+    private var sps: Data?
+    /// The SPS the first keyframe of this connection carried in-band (H.264
+    /// only): parse it to check the picture size was announced.
+    public var firstKeyFrameSPS: Data? { lock.lock(); defer { lock.unlock() }; return sps }
+
     func set(_ stats: (programs: Int, videoKeyFrames: Int)) {
         lock.lock(); programs = stats.programs; videoKeyFrames = stats.videoKeyFrames; lock.unlock()
+    }
+
+    func set(_ stats: (programs: Int, videoKeyFrames: Int), announcedSPS: Data?) {
+        lock.lock(); programs = stats.programs; videoKeyFrames = stats.videoKeyFrames; sps = announcedSPS; lock.unlock()
     }
 }
 
