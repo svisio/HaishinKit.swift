@@ -248,13 +248,19 @@ open class IOStream: NSObject {
     }
 
     /// The audio input formats.
+    ///
+    /// Sideline patch: read on the audio unit's queue, where every append
+    /// rewrites them. Upstream read the dictionary from the caller's thread
+    /// while the audio queue wrote it ("unrecognized selector ... count" /
+    /// EXC_BAD_ACCESS in Dictionary.isEmpty). Never call from that queue.
     public var audioInputFormats: [UInt8: AVAudioFormat] {
-        return mixer.audioIO.inputFormats
+        return mixer.audioIO.lockQueue.sync { mixer.audioIO.inputFormats }
     }
 
-    /// The video input formats.
+    /// The video input formats. Sideline patch: read on the video unit's queue
+    /// (see `audioInputFormats`).
     public var videoInputFormats: [UInt8: CMFormatDescription] {
-        return mixer.videoIO.inputFormats
+        return mixer.videoIO.lockQueue.sync { mixer.videoIO.inputFormats }
     }
 
     /// Specifies the controls sound.
