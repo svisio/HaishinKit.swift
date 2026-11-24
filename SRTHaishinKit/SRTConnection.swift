@@ -26,14 +26,25 @@ public final class SRTConnection: NSObject {
         }
     }
     /// Sideline patch: see `setSendObserver(_:)`.
-    private var sendObserver: (@Sendable (Data, Int32) -> Void)?
+    private var sendObserver: (@Sendable (Data, Int32, Int) -> Void)?
+    private let generationLock = NSLock()
+    private var generationCounter = 0
+    /// Sideline patch: which socket open() made last (1, 2, 3...; 0 = none
+    /// yet). Each socket passes its own number to the send observer, so a
+    /// chunk still queued on an old socket after a reopen is told apart from
+    /// the new socket's.
+    public var socketGeneration: Int {
+        generationLock.lock(); defer { generationLock.unlock() }
+        return generationCounter
+    }
 
     /// Sideline patch: called for every chunk the connection's socket hands to
     /// libsrt, on the socket's outgoing queue, with srt_sendmsg2's result
     /// (bytes accepted, or SRT_ERROR = -1 when the chunk was not sent). Applies
     /// to the current socket and every socket a later open() makes. Must be
-    /// cheap and must not block. nil = off.
-    public func setSendObserver(_ observer: (@Sendable (Data, Int32) -> Void)?) {
+    /// cheap and must not block. nil = off. The third argument is the
+    /// sending socket's `socketGeneration`.
+    public func setSendObserver(_ observer: (@Sendable (Data, Int32, Int) -> Void)?) {
         sendObserver = observer
         socket?.sendObserver = observer
     }
@@ -70,7 +81,9 @@ public final class SRTConnection: NSObject {
             do {
                 let options = SRTSocketOption.from(uri: uri)
                 let addr = sockaddr_in(mode.host(host), port: UInt16(port))
-                socket = .init()
+                let next = SRTSocket<SRTConnection>()
+                generationLock.lock(); generationCounter += 1; next.generation = generationCounter; generationLock.unlock()
+                socket = next
                 try socket?.open(addr, mode: mode, options: options)
                 self.uri = uri
                 switch mode {
