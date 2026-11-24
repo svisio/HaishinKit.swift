@@ -53,6 +53,10 @@ final class SRTSocket<T: SRTSocketDelegate> {
     }
     private var windowSizeC: Int32 = 1024 * 4
     private var outgoingBuffer: [Data] = .init()
+    /// Sideline patch: called on the outgoing queue for every chunk handed to
+    /// srt_sendmsg2, with its result (bytes accepted, or SRT_ERROR). Upstream
+    /// dropped a chunk that failed to send without a trace.
+    var sendObserver: (@Sendable (Data, Int32) -> Void)?
     private lazy var incomingBuffer: Data = .init(count: Int(windowSizeC))
     private let outgoingQueue: DispatchQueue = .init(label: "com.haishinkit.SRTHaishinKit.SRTSocket.outgoing", qos: .userInitiated)
     private let incomingQueue: DispatchQueue = .init(label: "com.haishinkit.SRTHaishinKit.SRTSocket.incoming", qos: .userInitiated)
@@ -128,7 +132,8 @@ final class SRTSocket<T: SRTSocketDelegate> {
                 guard var data = self.outgoingBuffer.first else {
                     return
                 }
-                _ = self.sendmsg2(&data)
+                let result = self.sendmsg2(&data)
+                self.sendObserver?(data, result)
                 self.outgoingBuffer.remove(at: 0)
             } while !self.outgoingBuffer.isEmpty
         }

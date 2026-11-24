@@ -22,7 +22,20 @@ public final class SRTConnection: NSObject {
     var socket: SRTSocket<SRTConnection>? {
         didSet {
             socket?.delegate = self
+            socket?.sendObserver = sendObserver
         }
+    }
+    /// Sideline patch: see `setSendObserver(_:)`.
+    private var sendObserver: (@Sendable (Data, Int32) -> Void)?
+
+    /// Sideline patch: called for every chunk the connection's socket hands to
+    /// libsrt, on the socket's outgoing queue, with srt_sendmsg2's result
+    /// (bytes accepted, or SRT_ERROR = -1 when the chunk was not sent). Applies
+    /// to the current socket and every socket a later open() makes. Must be
+    /// cheap and must not block. nil = off.
+    public func setSendObserver(_ observer: (@Sendable (Data, Int32) -> Void)?) {
+        sendObserver = observer
+        socket?.sendObserver = observer
     }
     var streams: [SRTStream] = []
     var clients: [SRTSocket<SRTConnection>] = []

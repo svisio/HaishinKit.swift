@@ -23,8 +23,6 @@ public final class SRTPublishStats: @unchecked Sendable {
 public final class SRTStream: IOStream {
     /// Sideline patch: lets the app check that a connection announced its video.
     public let publishStats = SRTPublishStats()
-    private let outputTapLock = NSLock()
-    private var outputTap: (@Sendable (Data) -> Void)?
     private var name: String?
     private var action: (() -> Void)?
     private var keyValueObservations: [NSKeyValueObservation] = []
@@ -132,15 +130,6 @@ public final class SRTStream: IOStream {
     }
 
     func doOutput(_ data: Data) {
-        outputTapLock.lock(); let tap = outputTap; outputTapLock.unlock()
-        tap?(data)
         connection?.socket?.doOutput(data: data)
-    }
-
-    /// Sideline patch: sees every MPEG-TS chunk exactly as it is handed to the
-    /// socket, before it is sent. Called on whatever thread wrote the chunk
-    /// (the TS writer's callers); it must be cheap and must not block. nil = off.
-    public func setOutputTap(_ tap: (@Sendable (Data) -> Void)?) {
-        outputTapLock.lock(); outputTap = tap; outputTapLock.unlock()
     }
 }
