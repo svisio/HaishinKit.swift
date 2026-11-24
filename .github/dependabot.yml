@@ -6,6 +6,7 @@ version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
+    open-pull-requests-limit: 0 # security updates only
     schedule:
       interval: "weekly"
       day: "sunday"
@@ -13,6 +14,7 @@ updates:
       timezone: "Asia/Tokyo"
   - package-ecosystem: "bundler" # See documentation for possible values
     directory: "/" # Location of package manifests
+    open-pull-requests-limit: 0 # security updates only
     schedule:
       interval: "weekly"
       day: "sunday"
